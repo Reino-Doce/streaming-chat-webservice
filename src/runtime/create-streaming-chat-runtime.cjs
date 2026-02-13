@@ -46,16 +46,26 @@ function asNumber(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function normalizeTikTokUniqueId(value) {
+  return asString(value, "").trim().replace(/^@+/, "");
+}
+
 function sanitizeRuntimeConfig(rawConfig) {
   const row = asObject(rawConfig, {});
   const ws = asObject(row.ws, {});
+  const connectorId = asString(row.connectorId, DEFAULT_CONFIG.connectorId).trim() || DEFAULT_CONFIG.connectorId;
+  const connectorConfig = {
+    ...asObject(DEFAULT_CONFIG.connectorConfig, {}),
+    ...asObject(row.connectorConfig, {}),
+  };
+
+  if (connectorId === "tiktok-live") {
+    connectorConfig.uniqueId = normalizeTikTokUniqueId(connectorConfig.uniqueId);
+  }
 
   return {
-    connectorId: asString(row.connectorId, DEFAULT_CONFIG.connectorId).trim() || DEFAULT_CONFIG.connectorId,
-    connectorConfig: {
-      ...asObject(DEFAULT_CONFIG.connectorConfig, {}),
-      ...asObject(row.connectorConfig, {}),
-    },
+    connectorId,
+    connectorConfig,
     connect: asBoolean(row.connect, DEFAULT_CONFIG.connect),
     reconnectOnDisconnect: asBoolean(
       row.reconnectOnDisconnect,

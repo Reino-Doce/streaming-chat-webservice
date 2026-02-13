@@ -5,6 +5,7 @@ import { describe, it, expect } from "vitest";
 import streamingChatPackage from "../src/index.cjs";
 
 const { createStreamingChatRuntime } = streamingChatPackage;
+const { validateRuntimeConfig } = streamingChatPackage;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -113,6 +114,52 @@ function waitForMessage(ws, predicate, timeoutMs = 2000) {
 }
 
 describe("streaming chat runtime", () => {
+  it("normalizes tiktok uniqueId by stripping leading @ during validation", () => {
+    const validation = validateRuntimeConfig({
+      connectorId: "tiktok-live",
+      connectorConfig: {
+        uniqueId: "@@alice",
+      },
+      connect: true,
+      reconnectOnDisconnect: true,
+      reconnectDelayMs: 1000,
+      ws: {
+        enabled: false,
+        protocol: "moblin-xmpp",
+        host: "127.0.0.1",
+        port: 5443,
+        token: "",
+      },
+      giftToSyntheticChat: true,
+    });
+
+    expect(validation.ok).toBe(true);
+    expect(validation.config.connectorConfig.uniqueId).toBe("alice");
+  });
+
+  it("rejects tiktok uniqueId that becomes empty after stripping @", () => {
+    const validation = validateRuntimeConfig({
+      connectorId: "tiktok-live",
+      connectorConfig: {
+        uniqueId: "@",
+      },
+      connect: true,
+      reconnectOnDisconnect: true,
+      reconnectDelayMs: 1000,
+      ws: {
+        enabled: false,
+        protocol: "moblin-xmpp",
+        host: "127.0.0.1",
+        port: 5443,
+        token: "",
+      },
+      giftToSyntheticChat: true,
+    });
+
+    expect(validation.ok).toBe(false);
+    expect(validation.errors).toContain("uniqueId do TikTok é obrigatório quando connect=true.");
+  });
+
   it("reconnects connector after disconnect", async () => {
     const harness = createMockConnectorHarness({ autoDisconnectMs: 30 });
     const runtime = createStreamingChatRuntime({ connectors: [harness.definition] });

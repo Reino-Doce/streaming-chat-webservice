@@ -48,7 +48,8 @@ Create a config file:
     "port": 5443,
     "token": "change-me"
   },
-  "giftToSyntheticChat": true
+  "giftToSyntheticChat": true,
+  "verbosity": "warn"
 }
 ```
 
@@ -73,14 +74,15 @@ streaming-chat-webservice start \
   --ws-enabled true \
   --ws-protocol json \
   --ws-port 5444 \
-  --ws-token dev-token
+  --ws-token dev-token \
+  --verbosity chat
 ```
 
 ## CLI Commands
 
 `streaming-chat-webservice start [--config path] [--adapter module]`
 
-- Starts runtime, logs connector events and status, and keeps process alive.
+- Starts runtime, keeps process alive, and logs according to `--verbosity` (default `warn`).
 - Stops gracefully on `SIGINT`/`SIGTERM`.
 
 `streaming-chat-webservice status [--config path] [--adapter module]`
@@ -105,13 +107,32 @@ Supported overrides:
 - `--ws-port <port>`
 - `--ws-token <token>`
 - `--gift-to-synthetic-chat <true|false>`
+- `--verbosity <error|warn|chat|debug>`
 - `--adapter <module-or-path>`
 
 Values can be passed as `--key value` or `--key=value`.
 
+## CLI Logging Verbosity
+
+Supported levels:
+
+- `error`: only connector/runtime errors.
+- `warn`: errors plus reconnect/disconnect warnings.
+- `chat`: warns/errors plus chat and gift output.
+- `debug`: all previous levels plus status snapshots and extra lifecycle/event details.
+
+Defaults and precedence:
+
+- Default is `warn`.
+- You can set config-file verbosity with top-level `"verbosity": "warn"`.
+- CLI `--verbosity` takes precedence over config-file `verbosity`.
+- Invalid verbosity values fall back to `warn`.
+
+This is CLI-only logging behavior and does not change the runtime package API surface.
+
 ## Runtime Config Reference
 
-Default runtime config:
+Default runtime config (programmatic runtime API):
 
 ```json
 {
@@ -141,6 +162,7 @@ Normalization and validation rules:
 - `ws.port` is clamped to `1024..65535`.
 - `ws.protocol` accepts `json`; all other values become `moblin-xmpp`.
 - If `ws.enabled=true`, `ws.token` is required.
+- For TikTok, `connectorConfig.uniqueId` is normalized by trimming and stripping leading `@`.
 - If `connect=true` and `connectorId=tiktok-live`, `connectorConfig.uniqueId` is required.
 
 ## Programmatic API

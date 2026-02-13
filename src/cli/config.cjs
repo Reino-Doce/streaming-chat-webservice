@@ -21,6 +21,9 @@ const DEFAULT_CONFIG = {
   giftToSyntheticChat: true,
 };
 
+const VALID_VERBOSITY_LEVELS = new Set(["error", "warn", "chat", "debug"]);
+const DEFAULT_VERBOSITY = "warn";
+
 function asBoolean(value, fallback = false) {
   if (typeof value === "boolean") return value;
   if (typeof value === "string") {
@@ -40,6 +43,25 @@ function asNumber(value, fallback = 0) {
 
 function asObject(value, fallback = {}) {
   return value && typeof value === "object" ? value : fallback;
+}
+
+function normalizeVerbosity(value, fallback = DEFAULT_VERBOSITY) {
+  const normalized = String(value ?? "").trim().toLowerCase();
+  if (VALID_VERBOSITY_LEVELS.has(normalized)) {
+    return normalized;
+  }
+  return fallback;
+}
+
+function resolveVerbosity(fileConfig, options) {
+  const configRow = asObject(fileConfig, {});
+  const optionRow = asObject(options, {});
+
+  if (Object.prototype.hasOwnProperty.call(optionRow, "verbosity")) {
+    return normalizeVerbosity(optionRow.verbosity, DEFAULT_VERBOSITY);
+  }
+
+  return normalizeVerbosity(configRow.verbosity, DEFAULT_VERBOSITY);
 }
 
 function parseArgs(argv) {
@@ -202,4 +224,5 @@ module.exports = {
   parseArgs,
   loadConfigFile,
   buildRuntimeConfig,
+  resolveVerbosity,
 };

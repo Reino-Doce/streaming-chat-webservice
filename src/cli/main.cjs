@@ -8,8 +8,22 @@ const {
   parseArgs,
   loadConfigFile,
   buildRuntimeConfig,
+  resolveVerbosity,
 } = require("./config.cjs");
 const { loadAdapter } = require("./adapter-loader.cjs");
+
+const VERBOSITY_WEIGHTS = {
+  error: 0,
+  warn: 1,
+  chat: 2,
+  debug: 3,
+};
+
+function shouldLog(verbosity, minimumLevel) {
+  const current = VERBOSITY_WEIGHTS[String(verbosity || "").trim()] ?? VERBOSITY_WEIGHTS.warn;
+  const required = VERBOSITY_WEIGHTS[String(minimumLevel || "").trim()] ?? VERBOSITY_WEIGHTS.warn;
+  return current >= required;
+}
 
 function printHelp() {
   // eslint-disable-next-line no-console
@@ -33,47 +47,79 @@ Common overrides:
   --ws-port <port>
   --ws-token <token>
   --gift-to-synthetic-chat <true|false>
+  --verbosity <error|warn|chat|debug>
 `);
 }
 
-function logStatus(status) {
-  // eslint-disable-next-line no-console
-  console.log(
-    `[status] connector=${status.connectorId} state=${status.connectorState} room=${status.roomId || "-"} wsRunning=${status.wsRunning} wsClients=${status.wsClientCount}`,
-  );
-}
+function createLogger(verbosity) {
+  const activeVerbosity = String(verbosity || "").trim() || "warn";
 
-function logEvent(event) {
-  const type = String(event?.type || "");
-  if (type === "chat") {
-    const author = String(event?.author?.effectiveName || "unknown");
+  function logStatus(status) {
+    if (!shouldLog(activeVerbosity, "debug")) return;
     // eslint-disable-next-line no-console
-    console.log(`[chat] ${author}: ${String(event?.message || "")}`);
-    return;
+    console.log(
+      `[status] connector=${status.connectorId} state=${status.connectorState} room=${status.roomId || "-"} wsRunning=${status.wsRunning} wsClients=${status.wsClientCount}`,
+    );
   }
 
-  if (type === "gift") {
-    const author = String(event?.author?.effectiveName || "unknown");
-    // eslint-disable-next-line no-console
-    console.log(`[gift] ${author}: ${String(event?.renderedText || "")}`);
-    return;
+  function logEvent(event) {
+    const type = String(event?.type || "");
+    if (type === "chat") {
+      if (!shouldLog(activeVerbosity, "chat")) return;
+      const author = String(event?.author?.effectiveName || "unknown");
+      // eslint-disable-next-line no-console
+      console.log(`[chat] ${author}: ${String(event?.message || "")}`);
+      return;
+    }
+
+    if (type === "gift") {
+      if (!shouldLog(activeVerbosity, "chat")) return;
+      const author = String(event?.author?.effectiveName || "unknown");
+      // eslint-disable-next-line no-console
+      console.log(`[gift] ${author}: ${String(event?.renderedText || "")}`);
+      return;
+    }
+
+    if (type === "lifecycle") {
+      const state = String(event?.state || "unknown");
+      const reason = String(event?.reason || "").trim();
+
+      if (state === "disconnected" || state === "reconnecting") {
+        if (!shouldLog(activeVerbosity, "warn")) return;
+        // eslint-disable-next-line no-console
+        console.warn(`[warn] ${state}${reason ? `: ${reason}` : ""}`);
+        return;
+      }
+
+      if (!shouldLog(activeVerbosity, "debug")) return;
+      // eslint-disable-next-line no-console
+      console.log(`[lifecycle] ${state}${reason ? ` ${reason}` : ""}`);
+      return;
+    }
+
+    if (type === "error") {
+      if (!shouldLog(activeVerbosity, "error")) return;
+      // eslint-disable-next-line no-console
+      console.error(`[error] ${String(event?.message || "")}`);
+      return;
+    }
+
+    if (shouldLog(activeVerbosity, "debug")) {
+      // eslint-disable-next-line no-console
+      console.log(`[event] ${type || "unknown"}`);
+    }
   }
 
-  if (type === "lifecycle") {
-    // eslint-disable-next-line no-console
-    console.log(`[lifecycle] ${String(event?.state || "unknown")} ${String(event?.reason || "").trim()}`.trim());
-    return;
-  }
-
-  if (type === "error") {
-    // eslint-disable-next-line no-console
-    console.error(`[error] ${String(event?.message || "")}`);
-  }
+  return {
+    logStatus,
+    logEvent,
+  };
 }
 
 async function resolveExecutionContext(options) {
   const fileConfig = loadConfigFile(options.config);
   const adapter = loadAdapter(options.adapter);
+  const verbosity = resolveVerbosity(fileConfig, options);
 
   const runtimeConfig = buildRuntimeConfig(fileConfig, options);
   const connectors = adapter ? [adapter] : [];
@@ -90,6 +136,7 @@ async function resolveExecutionContext(options) {
   return {
     runtimeConfig: validation.config,
     connectors,
+    verbosity,
   };
 }
 
@@ -114,11 +161,12 @@ async function runStart(options) {
   let shuttingDown = false;
 
   try {
-    const { runtimeConfig, connectors } = await resolveExecutionContext(options);
+    const { runtimeConfig, connectors, verbosity } = await resolveExecutionContext(options);
     runtime = createStreamingChatRuntime({ connectors });
+    const logger = createLogger(verbosity);
 
-    runtime.onStatus(logStatus);
-    runtime.onEvent(logEvent);
+    runtime.onStatus(logger.logStatus);
+    runtime.onEvent(logger.logEvent);
 
     await runtime.start(runtimeConfig);
 
