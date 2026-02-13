@@ -10,6 +10,59 @@ function normalizeUniqueId(value) {
   return asString(value, "").trim().replace(/^@+/, "").toLowerCase();
 }
 
+function extractErrorText(value, seen = new Set(), depth = 0) {
+  if (depth > 4) return "";
+
+  if (typeof value === "string") {
+    return value.trim();
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (!value || typeof value !== "object") {
+    return "";
+  }
+
+  if (seen.has(value)) return "";
+  seen.add(value);
+
+  const row = value;
+  const candidates = [
+    row.message,
+    row.reason,
+    row.error,
+    row.details,
+    row.statusMessage,
+    row.msg,
+  ];
+
+  for (const candidate of candidates) {
+    const text = extractErrorText(candidate, seen, depth + 1);
+    if (text && text !== "[object Object]") {
+      return text;
+    }
+  }
+
+  if (Array.isArray(row.errors)) {
+    const nested = row.errors
+      .map((entry) => extractErrorText(entry, seen, depth + 1))
+      .filter(Boolean)
+      .join(" | ");
+    if (nested) return nested;
+  }
+
+  try {
+    const serialized = JSON.stringify(row);
+    if (serialized && serialized !== "{}") {
+      return serialized;
+    }
+  } catch {}
+
+  return "";
+}
+
 function getConnectorModule() {
   if (connectorModule) return connectorModule;
   if (connectorLoadFailed) return null;
@@ -24,9 +77,9 @@ function getConnectorModule() {
 }
 
 function formatConnectError(error) {
-  const message = asString(error?.message ?? error, "").trim();
+  const message = extractErrorText(error);
   const nestedErrors = Array.isArray(error?.errors)
-    ? error.errors.map((entry) => asString(entry?.message ?? entry, "")).join(" | ")
+    ? error.errors.map((entry) => extractErrorText(entry)).filter(Boolean).join(" | ")
     : "";
   const combined = `${message} ${nestedErrors}`.toLowerCase();
 
@@ -42,6 +95,7 @@ function formatConnectError(error) {
     return "Falha ao resolver a sala da live. Ajustamos para não usar fallback Euler; tente conectar novamente.";
   }
 
+  if (nestedErrors) return nestedErrors;
   if (message) return message;
   return "Falha ao conectar no TikTok Live.";
 }
@@ -119,6 +173,31 @@ function createTikTokLiveConnector() {
 
         const { TikTokLiveConnection, WebcastEvent, ControlEvent } = connector;
         const config = rawConfig && typeof rawConfig === "object" ? rawConfig : {};
+        let lastErrorSignature = "";
+        let lastErrorAt = 0;
+
+        function emitConnectorError(error) {
+          const message = formatConnectError(error);
+          const signature = message.trim().toLowerCase();
+          const now = Date.now();
+
+          if (signature && signature === lastErrorSignature && now - lastErrorAt < 2000) {
+            return message;
+          }
+
+          lastErrorSignature = signature;
+          lastErrorAt = now;
+
+          emit({
+            type: "error",
+            at: now,
+            message,
+            fatal: false,
+            raw: error,
+          });
+
+          return message;
+        }
 
         const uniqueId = normalizeUniqueId(config.uniqueId);
         if (!uniqueId) {
@@ -167,13 +246,7 @@ function createTikTokLiveConnector() {
 
         candidate.on(ControlEvent.ERROR, (error) => {
           if (connection !== candidate) return;
-          emit({
-            type: "error",
-            at: Date.now(),
-            message: formatConnectError(error),
-            fatal: false,
-            raw: error,
-          });
+          emitConnectorError(error);
         });
 
         candidate.on(WebcastEvent.CHAT, (chatData) => {
@@ -225,14 +298,7 @@ function createTikTokLiveConnector() {
             connection = null;
           }
 
-          const message = formatConnectError(error);
-          emit({
-            type: "error",
-            at: Date.now(),
-            message,
-            fatal: false,
-            raw: error,
-          });
+          const message = emitConnectorError(error);
           emit({
             type: "lifecycle",
             at: Date.now(),

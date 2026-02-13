@@ -11,6 +11,7 @@ const DEFAULT_CONFIG = {
   connect: true,
   reconnectOnDisconnect: true,
   reconnectDelayMs: 5000,
+  reconnectDelayOfflineMs: 30000,
   ws: {
     enabled: false,
     protocol: "moblin-xmpp",
@@ -182,6 +183,16 @@ function buildRuntimeConfig(fileConfig, options) {
     config.reconnectDelayMs = Math.max(
       1000,
       Math.min(60000, Math.floor(asNumber(options["reconnect-delay-ms"], config.reconnectDelayMs))),
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(options, "reconnect-delay-offline-ms")) {
+    config.reconnectDelayOfflineMs = Math.max(
+      1000,
+      Math.min(
+        600000,
+        Math.floor(asNumber(options["reconnect-delay-offline-ms"], config.reconnectDelayOfflineMs)),
+      ),
     );
   }
 

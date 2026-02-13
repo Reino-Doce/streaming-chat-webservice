@@ -12,6 +12,7 @@ const DEFAULT_CONFIG = {
   connect: true,
   reconnectOnDisconnect: true,
   reconnectDelayMs: 5000,
+  reconnectDelayOfflineMs: 30000,
   ws: {
     enabled: false,
     protocol: "moblin-xmpp",
@@ -50,6 +51,21 @@ function normalizeTikTokUniqueId(value) {
   return asString(value, "").trim().replace(/^@+/, "");
 }
 
+function isOfflineReconnectReason(reason) {
+  const text = asString(reason, "").trim().toLowerCase();
+  if (!text) return false;
+
+  return (
+    text.includes("isn't online") ||
+    text.includes("is not online") ||
+    text.includes("not online") ||
+    text.includes("não está ao vivo") ||
+    text.includes("nao esta ao vivo") ||
+    text.includes("não foi possível confirmar a live") ||
+    text.includes("nao foi possivel confirmar a live")
+  );
+}
+
 function sanitizeRuntimeConfig(rawConfig) {
   const row = asObject(rawConfig, {});
   const ws = asObject(row.ws, {});
@@ -74,6 +90,13 @@ function sanitizeRuntimeConfig(rawConfig) {
     reconnectDelayMs: Math.max(
       1000,
       Math.min(60000, Math.floor(asNumber(row.reconnectDelayMs, DEFAULT_CONFIG.reconnectDelayMs))),
+    ),
+    reconnectDelayOfflineMs: Math.max(
+      1000,
+      Math.min(
+        600000,
+        Math.floor(asNumber(row.reconnectDelayOfflineMs, DEFAULT_CONFIG.reconnectDelayOfflineMs)),
+      ),
     ),
     ws: {
       enabled: asBoolean(ws.enabled, DEFAULT_CONFIG.ws.enabled),
@@ -303,10 +326,14 @@ function createStreamingChatRuntime(args = {}) {
     }
     publishStatus();
 
+    const delayMs = isOfflineReconnectReason(reason)
+      ? config.reconnectDelayOfflineMs
+      : config.reconnectDelayMs;
+
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connectConnector({ throwOnError: false }).catch(() => {});
-    }, config.reconnectDelayMs);
+    }, delayMs);
   }
 
   function handleConnectorEvent(event) {

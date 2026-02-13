@@ -25,6 +25,42 @@ function shouldLog(verbosity, minimumLevel) {
   return current >= required;
 }
 
+function formatLogText(value, fallback = "", seen = new Set()) {
+  if (typeof value === "string") {
+    const text = value.trim();
+    return text || fallback;
+  }
+
+  if (typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+
+  if (value && typeof value === "object") {
+    if (seen.has(value)) return fallback;
+    seen.add(value);
+
+    const row = value;
+    const nestedMessage = formatLogText(row.message, "", seen);
+    if (nestedMessage) return nestedMessage;
+
+    const nestedReason = formatLogText(row.reason, "", seen);
+    if (nestedReason) return nestedReason;
+
+    try {
+      const serialized = JSON.stringify(row);
+      if (serialized && serialized !== "{}") {
+        return serialized;
+      }
+    } catch {}
+  }
+
+  const text = String(value ?? "").trim();
+  if (!text || text === "[object Object]" || text === "undefined" || text === "null") {
+    return fallback;
+  }
+  return text;
+}
+
 function printHelp() {
   // eslint-disable-next-line no-console
   console.log(`streaming-chat-webservice
@@ -41,6 +77,7 @@ Common overrides:
   --connect <true|false>
   --reconnect-on-disconnect <true|false>
   --reconnect-delay-ms <number>
+  --reconnect-delay-offline-ms <number>
   --ws-enabled <true|false>
   --ws-protocol <moblin-xmpp|json>
   --ws-host <host>
@@ -81,11 +118,12 @@ function createLogger(verbosity) {
     }
 
     if (type === "lifecycle") {
-      const state = String(event?.state || "unknown");
-      const reason = String(event?.reason || "").trim();
+      const state = formatLogText(event?.state, "unknown");
+      const reason = formatLogText(event?.reason, "");
 
       if (state === "disconnected" || state === "reconnecting") {
         if (!shouldLog(activeVerbosity, "warn")) return;
+        if (state === "disconnected" && !reason) return;
         // eslint-disable-next-line no-console
         console.warn(`[warn] ${state}${reason ? `: ${reason}` : ""}`);
         return;
@@ -100,7 +138,7 @@ function createLogger(verbosity) {
     if (type === "error") {
       if (!shouldLog(activeVerbosity, "error")) return;
       // eslint-disable-next-line no-console
-      console.error(`[error] ${String(event?.message || "")}`);
+      console.error(`[error] ${formatLogText(event?.message, "Erro desconhecido do conector.")}`);
       return;
     }
 
@@ -151,7 +189,7 @@ async function runStatus(options) {
     return 0;
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.error(String(error?.message || error));
+    console.error(formatLogText(error?.message ?? error, "Erro ao validar configuração."));
     return 1;
   }
 }
@@ -195,7 +233,7 @@ async function runStart(options) {
     return 0;
   } catch (error) {
     // eslint-disable-next-line no-console
-    console.error(String(error?.message || error));
+    console.error(formatLogText(error?.message ?? error, "Falha ao iniciar runtime."));
 
     if (runtime) {
       try {
@@ -226,6 +264,6 @@ async function main() {
 
 main().catch((error) => {
   // eslint-disable-next-line no-console
-  console.error(String(error?.message || error));
+  console.error(formatLogText(error?.message ?? error, "Falha inesperada."));
   process.exit(1);
 });

@@ -56,6 +56,7 @@ export type RuntimeConfig = {
   connect: boolean;
   reconnectOnDisconnect: boolean;
   reconnectDelayMs: number;
+  reconnectDelayOfflineMs: number;
   ws: {
     enabled: boolean;
     protocol: WsProtocol;

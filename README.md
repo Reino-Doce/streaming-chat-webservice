@@ -41,6 +41,7 @@ Create a config file:
   "connect": true,
   "reconnectOnDisconnect": true,
   "reconnectDelayMs": 5000,
+  "reconnectDelayOfflineMs": 30000,
   "ws": {
     "enabled": true,
     "protocol": "moblin-xmpp",
@@ -74,6 +75,7 @@ streaming-chat-webservice start \
   --ws-enabled true \
   --ws-protocol json \
   --ws-port 5444 \
+  --reconnect-delay-offline-ms 30000 \
   --ws-token dev-token \
   --verbosity chat
 ```
@@ -101,6 +103,7 @@ Supported overrides:
 - `--connect <true|false>`
 - `--reconnect-on-disconnect <true|false>`
 - `--reconnect-delay-ms <number>`
+- `--reconnect-delay-offline-ms <number>`
 - `--ws-enabled <true|false>`
 - `--ws-protocol <moblin-xmpp|json>`
 - `--ws-host <host>`
@@ -145,6 +148,7 @@ Default runtime config (programmatic runtime API):
   "connect": true,
   "reconnectOnDisconnect": true,
   "reconnectDelayMs": 5000,
+  "reconnectDelayOfflineMs": 30000,
   "ws": {
     "enabled": false,
     "protocol": "moblin-xmpp",
@@ -159,11 +163,13 @@ Default runtime config (programmatic runtime API):
 Normalization and validation rules:
 
 - `reconnectDelayMs` is clamped to `1000..60000`.
+- `reconnectDelayOfflineMs` is clamped to `1000..600000`.
 - `ws.port` is clamped to `1024..65535`.
 - `ws.protocol` accepts `json`; all other values become `moblin-xmpp`.
 - If `ws.enabled=true`, `ws.token` is required.
 - For TikTok, `connectorConfig.uniqueId` is normalized by trimming and stripping leading `@`.
 - If `connect=true` and `connectorId=tiktok-live`, `connectorConfig.uniqueId` is required.
+- Reconnect uses `reconnectDelayOfflineMs` when the disconnect reason indicates the user is offline; otherwise it uses `reconnectDelayMs`.
 
 ## Programmatic API
 
@@ -191,6 +197,7 @@ const rawConfig = {
   connect: true,
   reconnectOnDisconnect: true,
   reconnectDelayMs: 5000,
+  reconnectDelayOfflineMs: 30000,
   ws: {
     enabled: true,
     protocol: "json",

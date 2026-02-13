@@ -15,7 +15,7 @@ function nextPort() {
   return 20000 + Math.floor(Math.random() * 20000);
 }
 
-function createMockConnectorHarness({ autoDisconnectMs = 0 } = {}) {
+function createMockConnectorHarness({ autoDisconnectMs = 0, autoDisconnectReason = "mock disconnect" } = {}) {
   let emitFn = null;
   let connectCount = 0;
 
@@ -42,7 +42,7 @@ function createMockConnectorHarness({ autoDisconnectMs = 0 } = {}) {
                 type: "lifecycle",
                 at: Date.now(),
                 state: "disconnected",
-                reason: "mock disconnect",
+                reason: autoDisconnectReason,
               });
             }, autoDisconnectMs);
           }
@@ -181,6 +181,39 @@ describe("streaming chat runtime", () => {
     });
 
     await wait(1300);
+    expect(harness.getConnectCount()).toBeGreaterThan(1);
+
+    await runtime.stop();
+  });
+
+  it("uses offline reconnect delay when disconnect reason indicates user offline", async () => {
+    const harness = createMockConnectorHarness({
+      autoDisconnectMs: 30,
+      autoDisconnectReason: "The requested user isn't online :(",
+    });
+    const runtime = createStreamingChatRuntime({ connectors: [harness.definition] });
+
+    await runtime.start({
+      connectorId: "mock-connector",
+      connectorConfig: {},
+      connect: true,
+      reconnectOnDisconnect: true,
+      reconnectDelayMs: 150,
+      reconnectDelayOfflineMs: 1000,
+      ws: {
+        enabled: false,
+        protocol: "moblin-xmpp",
+        host: "127.0.0.1",
+        port: nextPort(),
+        token: "",
+      },
+      giftToSyntheticChat: true,
+    });
+
+    await wait(450);
+    expect(harness.getConnectCount()).toBe(1);
+
+    await wait(800);
     expect(harness.getConnectCount()).toBeGreaterThan(1);
 
     await runtime.stop();
