@@ -3,7 +3,7 @@
 const {
   createStreamingChatRuntime,
   validateRuntimeConfig,
-} = require("../index.cjs");
+} = require("@reino-doce/streaming-chat-webservice");
 const {
   parseArgs,
   loadConfigFile,
@@ -11,6 +11,7 @@ const {
   resolveVerbosity,
 } = require("./config.cjs");
 const { loadAdapter } = require("./adapter-loader.cjs");
+const { createTikTokLiveConnector } = require("./connectors/tiktok-live-connector.cjs");
 
 const VERBOSITY_WEIGHTS = {
   error: 0,
@@ -154,17 +155,50 @@ function createLogger(verbosity) {
   };
 }
 
+function buildConnectors(adapter) {
+  const connectors = [createTikTokLiveConnector()];
+  if (adapter) {
+    connectors.push(adapter);
+  }
+  return connectors;
+}
+
+function normalizeTikTokUniqueId(value) {
+  return String(value ?? "").trim().replace(/^@+/, "");
+}
+
+function validateCliRuntimeConfig(runtimeConfig) {
+  const errors = [];
+  const connectorId = String(runtimeConfig?.connectorId || "").trim();
+
+  if (runtimeConfig?.connect && connectorId === "tiktok-live") {
+    const uniqueId = normalizeTikTokUniqueId(runtimeConfig?.connectorConfig?.uniqueId);
+    if (!uniqueId) {
+      errors.push("uniqueId do TikTok é obrigatório quando connect=true.");
+    } else {
+      runtimeConfig.connectorConfig = {
+        ...(runtimeConfig.connectorConfig || {}),
+        uniqueId,
+      };
+    }
+  }
+
+  return errors;
+}
+
 async function resolveExecutionContext(options) {
   const fileConfig = loadConfigFile(options.config);
   const adapter = loadAdapter(options.adapter);
   const verbosity = resolveVerbosity(fileConfig, options);
 
   const runtimeConfig = buildRuntimeConfig(fileConfig, options);
-  const connectors = adapter ? [adapter] : [];
+  const connectors = buildConnectors(adapter);
+  const cliErrors = validateCliRuntimeConfig(runtimeConfig);
 
   const validation = validateRuntimeConfig(runtimeConfig, { connectors });
-  if (!validation.ok) {
-    for (const error of validation.errors) {
+  const errors = [...cliErrors, ...validation.errors];
+  if (errors.length > 0) {
+    for (const error of errors) {
       // eslint-disable-next-line no-console
       console.error(`[invalid-config] ${error}`);
     }
@@ -262,8 +296,18 @@ async function main() {
   process.exit(command === "help" ? 0 : 1);
 }
 
-main().catch((error) => {
-  // eslint-disable-next-line no-console
-  console.error(formatLogText(error?.message ?? error, "Falha inesperada."));
-  process.exit(1);
-});
+if (require.main === module) {
+  main().catch((error) => {
+    // eslint-disable-next-line no-console
+    console.error(formatLogText(error?.message ?? error, "Falha inesperada."));
+    process.exit(1);
+  });
+}
+
+module.exports = {
+  buildConnectors,
+  resolveExecutionContext,
+  runStatus,
+  runStart,
+  main,
+};

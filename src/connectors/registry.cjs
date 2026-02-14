@@ -1,11 +1,6 @@
-const { createTikTokLiveConnector } = require("./tiktok-live-connector.cjs");
-
 function createConnectorRegistry(extraConnectors) {
   const map = new Map();
-  const connectors = [
-    createTikTokLiveConnector(),
-    ...(Array.isArray(extraConnectors) ? extraConnectors : []),
-  ];
+  const connectors = Array.isArray(extraConnectors) ? extraConnectors : [];
 
   for (const definition of connectors) {
     if (!definition || typeof definition !== "object") {

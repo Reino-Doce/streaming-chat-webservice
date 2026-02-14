@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { describe, it, expect } from "vitest";
-import cliConfigPackage from "../src/cli/config.cjs";
+import cliConfigPackage from "../src/config.cjs";
 
 const { resolveVerbosity, buildRuntimeConfig } = cliConfigPackage;
 

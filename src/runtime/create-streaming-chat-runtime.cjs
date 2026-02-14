@@ -3,13 +3,9 @@ const { createJsonWsTransport } = require("../transports/json-ws.cjs");
 const { createConnectorRegistry } = require("../connectors/registry.cjs");
 
 const DEFAULT_CONFIG = {
-  connectorId: "tiktok-live",
-  connectorConfig: {
-    uniqueId: "",
-    processInitialData: false,
-    authorMode: "username",
-  },
-  connect: true,
+  connectorId: "",
+  connectorConfig: {},
+  connect: false,
   reconnectOnDisconnect: true,
   reconnectDelayMs: 5000,
   reconnectDelayOfflineMs: 30000,
@@ -47,10 +43,6 @@ function asNumber(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
-function normalizeTikTokUniqueId(value) {
-  return asString(value, "").trim().replace(/^@+/, "");
-}
-
 function isOfflineReconnectReason(reason) {
   const text = asString(reason, "").trim().toLowerCase();
   if (!text) return false;
@@ -74,10 +66,6 @@ function sanitizeRuntimeConfig(rawConfig) {
     ...asObject(DEFAULT_CONFIG.connectorConfig, {}),
     ...asObject(row.connectorConfig, {}),
   };
-
-  if (connectorId === "tiktok-live") {
-    connectorConfig.uniqueId = normalizeTikTokUniqueId(connectorConfig.uniqueId);
-  }
 
   return {
     connectorId,
@@ -186,19 +174,17 @@ function validateRuntimeConfig(rawConfig, args = {}) {
   const config = sanitizeRuntimeConfig(rawConfig);
   const errors = [];
 
-  if (!connectorRegistry.get(config.connectorId)) {
+  if (config.connect && !config.connectorId) {
+    errors.push("connectorId é obrigatório quando connect=true.");
+  }
+
+  const requiresConnector = config.connect || !!config.connectorId;
+  if (requiresConnector && config.connectorId && !connectorRegistry.get(config.connectorId)) {
     errors.push(`Connector '${config.connectorId}' não foi encontrado.`);
   }
 
   if (config.ws.enabled && !config.ws.token) {
     errors.push("Token do WebSocket é obrigatório quando WS está habilitado.");
-  }
-
-  if (config.connect && config.connectorId === "tiktok-live") {
-    const uniqueId = asString(config.connectorConfig?.uniqueId, "").trim();
-    if (!uniqueId) {
-      errors.push("uniqueId do TikTok é obrigatório quando connect=true.");
-    }
   }
 
   return {

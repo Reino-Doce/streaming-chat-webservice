@@ -98,8 +98,6 @@ export function createStreamingChatRuntime(args?: {
   connectors?: StreamingConnectorDefinition[];
 }): StreamingChatRuntime;
 
-export function createTikTokLiveConnector(): StreamingConnectorDefinition;
-
 export function validateRuntimeConfig(
   rawConfig: Partial<RuntimeConfig>,
   args?: { connectors?: StreamingConnectorDefinition[] },

@@ -114,50 +114,45 @@ function waitForMessage(ws, predicate, timeoutMs = 2000) {
 }
 
 describe("streaming chat runtime", () => {
-  it("normalizes tiktok uniqueId by stripping leading @ during validation", () => {
-    const validation = validateRuntimeConfig({
-      connectorId: "tiktok-live",
-      connectorConfig: {
-        uniqueId: "@@alice",
-      },
-      connect: true,
-      reconnectOnDisconnect: true,
-      reconnectDelayMs: 1000,
-      ws: {
-        enabled: false,
-        protocol: "moblin-xmpp",
-        host: "127.0.0.1",
-        port: 5443,
-        token: "",
-      },
-      giftToSyntheticChat: true,
-    });
+  it("accepts neutral idle config during validation", () => {
+    const validation = validateRuntimeConfig({});
 
     expect(validation.ok).toBe(true);
-    expect(validation.config.connectorConfig.uniqueId).toBe("alice");
+    expect(validation.errors).toEqual([]);
+    expect(validation.config.connectorId).toBe("");
+    expect(validation.config.connect).toBe(false);
   });
 
-  it("rejects tiktok uniqueId that becomes empty after stripping @", () => {
+  it("rejects validation when connect=true and connectorId is empty", () => {
     const validation = validateRuntimeConfig({
-      connectorId: "tiktok-live",
-      connectorConfig: {
-        uniqueId: "@",
-      },
       connect: true,
-      reconnectOnDisconnect: true,
-      reconnectDelayMs: 1000,
-      ws: {
-        enabled: false,
-        protocol: "moblin-xmpp",
-        host: "127.0.0.1",
-        port: 5443,
-        token: "",
-      },
-      giftToSyntheticChat: true,
     });
 
     expect(validation.ok).toBe(false);
-    expect(validation.errors).toContain("uniqueId do TikTok é obrigatório quando connect=true.");
+    expect(validation.errors).toContain("connectorId é obrigatório quando connect=true.");
+  });
+
+  it("rejects unknown explicit connectorId during validation", () => {
+    const validation = validateRuntimeConfig({
+      connectorId: "missing-connector",
+      connect: false,
+    });
+
+    expect(validation.ok).toBe(false);
+    expect(validation.errors).toContain("Connector 'missing-connector' não foi encontrado.");
+  });
+
+  it("accepts validation when connector is registered by host program", () => {
+    const harness = createMockConnectorHarness();
+    const validation = validateRuntimeConfig(
+      {
+        connectorId: "mock-connector",
+        connect: true,
+      },
+      { connectors: [harness.definition] },
+    );
+
+    expect(validation.ok).toBe(true);
   });
 
   it("reconnects connector after disconnect", async () => {
@@ -281,10 +276,8 @@ describe("streaming chat runtime", () => {
     const port = nextPort();
 
     await runtime.start({
-      connectorId: "tiktok-live",
-      connectorConfig: {
-        uniqueId: "",
-      },
+      connectorId: "",
+      connectorConfig: {},
       connect: false,
       reconnectOnDisconnect: true,
       reconnectDelayMs: 1000,

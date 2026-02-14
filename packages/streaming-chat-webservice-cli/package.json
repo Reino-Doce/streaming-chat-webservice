@@ -1,0 +1,26 @@
+{
+  "name": "@reino-doce/streaming-chat-webservice-cli",
+  "version": "0.1.0",
+  "description": "Standalone CLI for the streaming chat runtime with built-in TikTok Live connector.",
+  "license": "ISC",
+  "type": "commonjs",
+  "main": "src/main.cjs",
+  "bin": {
+    "streaming-chat-webservice": "src/main.cjs"
+  },
+  "files": [
+    "src",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "vitest run",
+    "smoke": "node src/main.cjs --help"
+  },
+  "dependencies": {
+    "@reino-doce/streaming-chat-webservice": "^1.0.0",
+    "tiktok-live-connector": "^2.1.1-beta1"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.18"
+  }
+}
