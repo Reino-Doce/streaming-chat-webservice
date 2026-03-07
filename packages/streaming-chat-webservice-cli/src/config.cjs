@@ -7,14 +7,17 @@ const DEFAULT_CONFIG = {
     uniqueId: "",
     processInitialData: false,
     authorMode: "username",
+    verbose: false,
+    verboseLogPath: "",
   },
   connect: true,
+  monitor: false,
   reconnectOnDisconnect: true,
   reconnectDelayMs: 5000,
   reconnectDelayOfflineMs: 30000,
   ws: {
     enabled: false,
-    protocol: "moblin-xmpp",
+    protocol: "uscp-sse/1",
     host: "0.0.0.0",
     port: 5443,
     token: "",
@@ -168,8 +171,23 @@ function buildRuntimeConfig(fileConfig, options) {
       : "username";
   }
 
+  if (Object.prototype.hasOwnProperty.call(options, "verbose")) {
+    config.connectorConfig.verbose = asBoolean(
+      options.verbose,
+      !!config.connectorConfig.verbose,
+    );
+  }
+
+  if (Object.prototype.hasOwnProperty.call(options, "verbose-log-path")) {
+    config.connectorConfig.verboseLogPath = String(options["verbose-log-path"] || "").trim();
+  }
+
   if (Object.prototype.hasOwnProperty.call(options, "connect")) {
     config.connect = asBoolean(options.connect, !!config.connect);
+  }
+
+  if (Object.prototype.hasOwnProperty.call(options, "monitor")) {
+    config.monitor = asBoolean(options.monitor, !!config.monitor);
   }
 
   if (Object.prototype.hasOwnProperty.call(options, "reconnect-on-disconnect")) {
@@ -201,9 +219,9 @@ function buildRuntimeConfig(fileConfig, options) {
   }
 
   if (Object.prototype.hasOwnProperty.call(options, "ws-protocol")) {
-    config.ws.protocol = String(options["ws-protocol"] || "").trim() === "json"
-      ? "json"
-      : "moblin-xmpp";
+    config.ws.protocol = String(options["ws-protocol"] || "").trim() === "moblin-xmpp"
+      ? "moblin-xmpp"
+      : "uscp-sse/1";
   }
 
   if (Object.prototype.hasOwnProperty.call(options, "ws-host")) {

@@ -104,4 +104,12 @@ module.exports = {
       "unique-id": "@",
     })).rejects.toThrow("Configuração inválida.");
   });
+
+  it("requires non-empty tiktok uniqueId when monitor=true", async () => {
+    await expect(resolveExecutionContext({
+      "connector-id": "tiktok-live",
+      monitor: "true",
+      "unique-id": "@",
+    })).rejects.toThrow("Configuração inválida.");
+  });
 });

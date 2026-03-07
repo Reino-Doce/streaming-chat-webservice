@@ -1,4 +1,4 @@
-export type WsProtocol = "moblin-xmpp" | "json";
+export type WsProtocol = "uscp-sse/1" | "moblin-xmpp";
 
 export type AuthorIdentity = {
   id?: string;
@@ -36,7 +36,18 @@ export type StreamingEvent =
       at: number;
       message: string;
       fatal: boolean;
+      code?: string;
+      suppressStream?: boolean;
       raw?: unknown;
+    }
+  | {
+      type: "protocol";
+      platform: string;
+      at: number;
+      author?: AuthorIdentity;
+      typeCode: string;
+      payload: Record<string, unknown>;
+      tags?: string[];
     };
 
 export interface StreamingConnectorInstance {
@@ -54,6 +65,7 @@ export type RuntimeConfig = {
   connectorId: string;
   connectorConfig: Record<string, unknown>;
   connect: boolean;
+  monitor: boolean;
   reconnectOnDisconnect: boolean;
   reconnectDelayMs: number;
   reconnectDelayOfflineMs: number;

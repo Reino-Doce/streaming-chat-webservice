@@ -1,17 +1,18 @@
 const { createMoblinXmppWsTransport } = require("../transports/moblin-xmpp-ws.cjs");
-const { createJsonWsTransport } = require("../transports/json-ws.cjs");
+const { createUscpSseHttpTransport } = require("../transports/uscp-sse-http.cjs");
 const { createConnectorRegistry } = require("../connectors/registry.cjs");
 
 const DEFAULT_CONFIG = {
   connectorId: "",
   connectorConfig: {},
   connect: false,
+  monitor: false,
   reconnectOnDisconnect: true,
   reconnectDelayMs: 5000,
   reconnectDelayOfflineMs: 30000,
   ws: {
     enabled: false,
-    protocol: "moblin-xmpp",
+    protocol: "uscp-sse/1",
     host: "0.0.0.0",
     port: 5443,
     token: "",
@@ -71,6 +72,7 @@ function sanitizeRuntimeConfig(rawConfig) {
     connectorId,
     connectorConfig,
     connect: asBoolean(row.connect, DEFAULT_CONFIG.connect),
+    monitor: asBoolean(row.monitor, DEFAULT_CONFIG.monitor),
     reconnectOnDisconnect: asBoolean(
       row.reconnectOnDisconnect,
       DEFAULT_CONFIG.reconnectOnDisconnect,
@@ -88,9 +90,9 @@ function sanitizeRuntimeConfig(rawConfig) {
     ),
     ws: {
       enabled: asBoolean(ws.enabled, DEFAULT_CONFIG.ws.enabled),
-      protocol: asString(ws.protocol, DEFAULT_CONFIG.ws.protocol).trim() === "json"
-        ? "json"
-        : "moblin-xmpp",
+      protocol: asString(ws.protocol, DEFAULT_CONFIG.ws.protocol).trim() === "moblin-xmpp"
+        ? "moblin-xmpp"
+        : "uscp-sse/1",
       host: asString(ws.host, DEFAULT_CONFIG.ws.host).trim() || DEFAULT_CONFIG.ws.host,
       port: Math.max(
         1024,
@@ -146,10 +148,10 @@ function cloneStatus(status) {
 }
 
 function createWsTransport(protocol) {
-  if (protocol === "json") {
-    return createJsonWsTransport();
+  if (protocol === "moblin-xmpp") {
+    return createMoblinXmppWsTransport();
   }
-  return createMoblinXmppWsTransport();
+  return createUscpSseHttpTransport();
 }
 
 function extractAuthorName(author) {
@@ -174,11 +176,11 @@ function validateRuntimeConfig(rawConfig, args = {}) {
   const config = sanitizeRuntimeConfig(rawConfig);
   const errors = [];
 
-  if (config.connect && !config.connectorId) {
-    errors.push("connectorId é obrigatório quando connect=true.");
+  if ((config.connect || config.monitor) && !config.connectorId) {
+    errors.push("connectorId é obrigatório quando connect=true ou monitor=true.");
   }
 
-  const requiresConnector = config.connect || !!config.connectorId;
+  const requiresConnector = config.connect || config.monitor || !!config.connectorId;
   if (requiresConnector && config.connectorId && !connectorRegistry.get(config.connectorId)) {
     errors.push(`Connector '${config.connectorId}' não foi encontrado.`);
   }
@@ -210,6 +212,116 @@ function createStreamingChatRuntime(args = {}) {
   let reconnectTimer = null;
   let disconnecting = false;
   let connectAttempt = 0;
+  let activeConnectorPlatform = "";
+  let lastRoomId = null;
+  let lastSyntheticUpstreamNoticeKey = "";
+
+  function wantsConnection() {
+    return !!(config.connect || config.monitor);
+  }
+
+  function shouldAutoReconnect() {
+    if (!started || !wantsConnection()) return false;
+    if (config.monitor) return true;
+    return !!config.reconnectOnDisconnect;
+  }
+
+  function resetSyntheticUpstreamNotice() {
+    lastSyntheticUpstreamNoticeKey = "";
+  }
+
+  function getActiveConnectorPlatform() {
+    if (activeConnectorPlatform) return activeConnectorPlatform;
+
+    const definition = connectorRegistry.get(config.connectorId);
+    const platform = asString(definition?.platform, "").trim();
+    return platform || "stream";
+  }
+
+  function emitSyntheticUpstreamNotice({ upstreamEvent, state, summary, reason = "", roomId = null }) {
+    const eventName = asString(upstreamEvent, "").trim();
+    const nextState = asString(state, "").trim();
+    const text = asString(summary, "").trim();
+    const normalizedRoomId = asString(roomId, "").trim();
+    const key = `${config.connectorId}|${eventName}|${normalizedRoomId}`;
+
+    if (!eventName || !nextState || !text) return;
+    if (lastSyntheticUpstreamNoticeKey === key) return;
+
+    lastSyntheticUpstreamNoticeKey = key;
+
+    const payload = {
+      summary: text,
+      upstream: asString(config.connectorId, "").trim() || "runtime",
+      upstream_event: eventName,
+      state: nextState,
+    };
+
+    const normalizedReason = asString(reason, "").trim();
+    if (normalizedReason) {
+      payload.reason = normalizedReason;
+    }
+
+    if (normalizedRoomId) {
+      payload.source_room_id = normalizedRoomId;
+    }
+
+    handleConnectorEvent({
+      type: "protocol",
+      platform: getActiveConnectorPlatform(),
+      at: Date.now(),
+      typeCode: "system.upstream.event",
+      payload,
+    });
+  }
+
+  function notifyLifecycleStatus({ state, reason = "", roomId = null, force = false }) {
+    if (!config.monitor) return;
+    if (!force && disconnecting) return;
+
+    const normalizedState = asString(state, "").trim();
+    const normalizedReason = asString(reason, "").trim();
+    const normalizedRoomId = asString(roomId, "").trim();
+
+    if (normalizedState === "connected") {
+      const summary = normalizedRoomId
+        ? `Conectado ao chat. Sala: ${normalizedRoomId}.`
+        : "Conectado ao chat.";
+      emitSyntheticUpstreamNotice({
+        upstreamEvent: "monitor.connected",
+        state: "connected",
+        summary,
+        roomId: normalizedRoomId,
+      });
+      return;
+    }
+
+    if (normalizedState !== "disconnected") {
+      return;
+    }
+
+    if (isOfflineReconnectReason(normalizedReason)) {
+      emitSyntheticUpstreamNotice({
+        upstreamEvent: "monitor.offline",
+        state: "offline",
+        summary: "Usuário ficou offline.",
+        reason: normalizedReason,
+        roomId: normalizedRoomId || lastRoomId,
+      });
+      return;
+    }
+
+    const summary = normalizedReason
+      ? `Conexão com o chat perdida. Motivo: ${normalizedReason}.`
+      : "Conexão com o chat perdida.";
+    emitSyntheticUpstreamNotice({
+      upstreamEvent: "monitor.disconnected",
+      state: "disconnected",
+      summary,
+      reason: normalizedReason,
+      roomId: normalizedRoomId || lastRoomId,
+    });
+  }
 
   function emitEvent(event) {
     for (const listener of eventListeners) {
@@ -293,8 +405,9 @@ function createStreamingChatRuntime(args = {}) {
     }
   }
 
-  function broadcastJsonEventIfEnabled(event) {
-    if (!config.ws.enabled || config.ws.protocol !== "json" || !transport) return;
+  function broadcastProtocolEventIfEnabled(event) {
+    if (!config.ws.enabled || !transport) return;
+    if (config.ws.protocol !== "uscp-sse/1") return;
 
     try {
       transport.broadcastEvent(event);
@@ -302,7 +415,7 @@ function createStreamingChatRuntime(args = {}) {
   }
 
   function scheduleReconnect(reason) {
-    if (!started || !config.connect || !config.reconnectOnDisconnect) return;
+    if (!shouldAutoReconnect()) return;
 
     clearReconnectTimer();
 
@@ -327,13 +440,77 @@ function createStreamingChatRuntime(args = {}) {
 
     const type = asString(event.type, "").trim();
 
+    if (type === "protocol") {
+      const typeCode = asString(event.typeCode, "").trim();
+      const payload = asObject(event.payload, {});
+      if (!typeCode || !payload || typeof payload !== "object") {
+        return;
+      }
+
+      if (typeCode === "chat.message") {
+        status.totalChatCount += 1;
+
+        if (config.ws.enabled && transport && config.ws.protocol === "moblin-xmpp") {
+          const message = asString(payload.message_text, "").trim();
+          if (message) {
+            const author =
+              asString(payload.user_displayname, "").trim() ||
+              extractAuthorName(event.author);
+
+            try {
+              transport.broadcastChat({
+                platform: asString(event.platform, "stream").trim() || "stream",
+                author,
+                message,
+              });
+            } catch {}
+          }
+        }
+      }
+
+      if (typeCode === "monetization.donation.gift") {
+        status.totalGiftCount += 1;
+
+        if (
+          config.ws.enabled &&
+          transport &&
+          config.ws.protocol === "moblin-xmpp" &&
+          config.giftToSyntheticChat
+        ) {
+          const giftId = asString(payload.gift_id, "").trim();
+          const donationValue = asString(payload.donation_value, "").trim();
+          const author =
+            asString(payload.user_displayname, "").trim() ||
+            extractAuthorName(event.author);
+          const message = giftId
+            ? `[GIFT] ${giftId}${donationValue ? ` (${donationValue})` : ""}`
+            : donationValue;
+
+          if (message) {
+            try {
+              transport.broadcastChat({
+                platform: asString(event.platform, "stream").trim() || "stream",
+                author,
+                message,
+              });
+            } catch {}
+          }
+        }
+      }
+
+      broadcastProtocolEventIfEnabled(event);
+      emitEvent(event);
+      publishStatus();
+      return;
+    }
+
     if (type === "chat") {
       const message = asString(event.message, "").trim();
       if (!message) return;
 
       status.totalChatCount += 1;
 
-      if (config.ws.enabled && transport) {
+      if (config.ws.enabled && transport && config.ws.protocol === "moblin-xmpp") {
         const author = extractAuthorName(event.author);
         const platform = asString(event.platform, "stream").trim() || "stream";
 
@@ -346,6 +523,8 @@ function createStreamingChatRuntime(args = {}) {
         } catch {}
       }
 
+      broadcastProtocolEventIfEnabled(event);
+
       emitEvent(event);
       publishStatus();
       return;
@@ -354,9 +533,14 @@ function createStreamingChatRuntime(args = {}) {
     if (type === "gift") {
       status.totalGiftCount += 1;
 
-      broadcastJsonEventIfEnabled(event);
+      broadcastProtocolEventIfEnabled(event);
 
-      if (config.ws.enabled && transport && config.giftToSyntheticChat) {
+      if (
+        config.ws.enabled &&
+        transport &&
+        config.ws.protocol === "moblin-xmpp" &&
+        config.giftToSyntheticChat
+      ) {
         const giftText = asString(event.renderedText, "").trim();
         if (giftText) {
           try {
@@ -382,10 +566,16 @@ function createStreamingChatRuntime(args = {}) {
       } else if (lifecycleState === "connected") {
         status.connectorState = "connected";
         status.roomId = asString(event.roomId, "") || null;
+        lastRoomId = status.roomId;
         status.lastError = "";
+        notifyLifecycleStatus({
+          state: "connected",
+          roomId: status.roomId,
+        });
       } else if (lifecycleState === "reconnecting") {
         status.connectorState = "reconnecting";
       } else if (lifecycleState === "disconnected") {
+        const disconnectedRoomId = status.roomId || lastRoomId;
         status.roomId = null;
 
         const reason = asString(event.reason, "").trim();
@@ -393,15 +583,25 @@ function createStreamingChatRuntime(args = {}) {
           status.lastError = reason;
         }
 
-        if (disconnecting || !config.connect) {
+        if (!disconnecting) {
+          notifyLifecycleStatus({
+            state: "disconnected",
+            reason,
+            roomId: disconnectedRoomId,
+          });
+        }
+
+        if (disconnecting || !wantsConnection()) {
           status.connectorState = "idle";
-        } else {
+        } else if (shouldAutoReconnect()) {
           scheduleReconnect(reason || status.lastError);
+        } else {
+          status.connectorState = "idle";
         }
       }
 
       emitEvent(event);
-      broadcastJsonEventIfEnabled(event);
+      broadcastProtocolEventIfEnabled(event);
       publishStatus();
       return;
     }
@@ -411,11 +611,14 @@ function createStreamingChatRuntime(args = {}) {
       status.lastError = message;
 
       emitEvent(event);
-      broadcastJsonEventIfEnabled(event);
+      if (!asBoolean(event.suppressStream, false)) {
+        broadcastProtocolEventIfEnabled(event);
+      }
       publishStatus();
       return;
     }
 
+    broadcastProtocolEventIfEnabled(event);
     emitEvent(event);
   }
 
@@ -427,6 +630,11 @@ function createStreamingChatRuntime(args = {}) {
     if (!connectorInstance) {
       status.connectorState = "idle";
       status.roomId = null;
+      if (manual) {
+        lastRoomId = null;
+        activeConnectorPlatform = "";
+        resetSyntheticUpstreamNotice();
+      }
       if (manual) {
         status.lastError = "";
       }
@@ -447,6 +655,9 @@ function createStreamingChatRuntime(args = {}) {
 
     status.connectorState = "idle";
     status.roomId = null;
+    lastRoomId = null;
+    activeConnectorPlatform = "";
+    resetSyntheticUpstreamNotice();
     if (manual) {
       status.lastError = "";
     }
@@ -472,6 +683,8 @@ function createStreamingChatRuntime(args = {}) {
     const attemptId = ++connectAttempt;
     const instance = definition.create();
     connectorInstance = instance;
+    activeConnectorPlatform = asString(definition.platform, "").trim() || activeConnectorPlatform;
+    let sawDisconnectedLifecycle = false;
 
     status.connectorId = config.connectorId;
     status.connectorState = status.connectorState === "reconnecting" ? "reconnecting" : "connecting";
@@ -481,6 +694,14 @@ function createStreamingChatRuntime(args = {}) {
     try {
       await instance.connect(config.connectorConfig, (event) => {
         if (attemptId !== connectAttempt || connectorInstance !== instance) return;
+
+        if (asString(event?.type, "").trim() === "lifecycle") {
+          const lifecycleState = asString(event?.state, "").trim();
+          if (lifecycleState === "disconnected") {
+            sawDisconnectedLifecycle = true;
+          }
+        }
+
         handleConnectorEvent(event);
       });
 
@@ -502,8 +723,12 @@ function createStreamingChatRuntime(args = {}) {
           state: "connected",
           roomId: status.roomId,
         };
+        notifyLifecycleStatus({
+          state: "connected",
+          roomId: status.roomId,
+        });
         emitEvent(event);
-        broadcastJsonEventIfEnabled(event);
+        broadcastProtocolEventIfEnabled(event);
       }
     } catch (error) {
       if (attemptId !== connectAttempt) {
@@ -525,12 +750,21 @@ function createStreamingChatRuntime(args = {}) {
         at: Date.now(),
         message,
         fatal: false,
-        raw: error,
+        suppressStream: !!config.monitor,
       };
       emitEvent(event);
-      broadcastJsonEventIfEnabled(event);
+      broadcastProtocolEventIfEnabled(event);
 
-      if (config.connect && started && config.reconnectOnDisconnect) {
+      if (!sawDisconnectedLifecycle) {
+        notifyLifecycleStatus({
+          state: "disconnected",
+          reason: message,
+          roomId: lastRoomId,
+          force: true,
+        });
+      }
+
+      if (shouldAutoReconnect()) {
         scheduleReconnect(message);
       }
 
@@ -543,7 +777,7 @@ function createStreamingChatRuntime(args = {}) {
   async function reconcileConnection({ throwOnError = false } = {}) {
     if (!started) return;
 
-    if (!config.connect) {
+    if (!wantsConnection()) {
       await disconnectConnector({ manual: true });
       return;
     }
@@ -569,7 +803,7 @@ function createStreamingChatRuntime(args = {}) {
     started = true;
 
     applyWsConfig();
-    await reconcileConnection({ throwOnError: config.connect });
+    await reconcileConnection({ throwOnError: config.connect && !config.monitor });
 
     return cloneStatus(status);
   }
@@ -584,9 +818,14 @@ function createStreamingChatRuntime(args = {}) {
 
     applyWsConfig();
 
-    const shouldThrow = Object.prototype.hasOwnProperty.call(asObject(configPatch, {}), "connect")
-      ? !!configPatch.connect
-      : false;
+    const patchRow = asObject(configPatch, {});
+    const shouldThrow =
+      (
+        Object.prototype.hasOwnProperty.call(patchRow, "connect") ||
+        Object.prototype.hasOwnProperty.call(patchRow, "monitor")
+      )
+        ? !!(config.connect && !config.monitor)
+        : false;
 
     await reconcileConnection({ throwOnError: shouldThrow });
 
@@ -599,6 +838,7 @@ function createStreamingChatRuntime(args = {}) {
 
     config = mergeRuntimeConfig(config, {
       connect: false,
+      monitor: false,
       ws: {
         enabled: false,
       },
@@ -610,6 +850,9 @@ function createStreamingChatRuntime(args = {}) {
     status.wsRunning = false;
     status.wsClientCount = 0;
     status.wsLastError = "";
+    activeConnectorPlatform = "";
+    lastRoomId = null;
+    resetSyntheticUpstreamNotice();
     publishStatus();
 
     return cloneStatus(status);
